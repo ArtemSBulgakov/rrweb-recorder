@@ -2,6 +2,7 @@
   "name": "rrweb-recorder-extension",
   "version": "0.1.0",
   "private": true,
+  "packageManager": "pnpm@10.12.4",
   "type": "module",
   "scripts": {
     "icons": "node scripts/generate-icons.mjs",
