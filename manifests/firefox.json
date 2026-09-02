@@ -1,0 +1,16 @@
+{
+  "manifest_version": 3,
+  "name": "rrweb Recorder",
+  "version": "0.1.0",
+  "description": "Record and replay multi-tab browser sessions locally.",
+  "permissions": ["storage", "tabs", "webNavigation", "scripting"],
+  "host_permissions": ["<all_urls>"],
+  "background": { "scripts": ["assets/background.js"], "type": "module" },
+  "action": { "default_popup": "src/popup/index.html", "default_icon": { "16": "icons/icon-16.png", "32": "icons/icon-32.png", "48": "icons/icon-48.png", "128": "icons/icon-128.png" } },
+  "icons": { "16": "icons/icon-16.png", "32": "icons/icon-32.png", "48": "icons/icon-48.png", "128": "icons/icon-128.png" },
+  "content_scripts": [
+    { "matches": ["<all_urls>"], "js": ["assets/content.js"], "run_at": "document_start", "all_frames": false },
+    { "matches": ["<all_urls>"], "js": ["assets/recorder.js"], "run_at": "document_start", "all_frames": false, "world": "MAIN" }
+  ],
+  "browser_specific_settings": { "gecko": { "id": "rrweb-recorder@example.local", "strict_min_version": "128.0" } }
+}

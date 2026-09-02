@@ -1,0 +1,13 @@
+<!doctype html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width"><title>rrweb Recorder</title></head>
+<body><main class="popup"><header class="popup-header"><div><h2>rrweb Recorder</h2><p id="status" class="muted">Loading…</p></div><span id="timer" class="timer">00:00</span></header>
+<p id="error" class="error-message" hidden></p>
+<div id="summary" class="summary" hidden><div><strong id="event-count">0</strong><span>events</span></div><div><strong id="tab-count">0</strong><span>tabs</span></div></div>
+<section id="tracked" hidden><h3>Recording tabs</h3><ul id="tabs"></ul></section>
+<section id="options">
+<label><input id="console" type="checkbox" checked> Record console</label>
+<label><input id="network" type="checkbox" checked> Record network requests</label>
+<label><input id="deep-network" type="checkbox"> Capture all response bodies <span class="hint">Chromium debugger</span></label>
+<label><input id="sequential" type="checkbox" checked> Sequential ID</label>
+</section>
+<div class="toolbar"><button id="toggle">Play</button><button id="reload-tabs" class="secondary" hidden>Reload recorded tabs</button><button id="library" class="secondary">Recordings</button></div>
+</main><script type="module" src="./index.ts"></script></body></html>
