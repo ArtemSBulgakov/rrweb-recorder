@@ -1,6 +1,7 @@
 import '../ui.css';
 import { strToU8, zipSync } from 'fflate';
-import { deleteRecording, getEvents, listRecordings, renameRecording } from '../storage/db';
+import { deleteRecording, getEvents, getHarEntries, listRecordings, renameRecording } from '../storage/db';
+import { wrapHarEntries } from '../shared/har';
 const ext = chrome;
 const list = document.querySelector<HTMLElement>('#list')!;
 document.querySelector('#import-recording')!.addEventListener('click', () => {
@@ -34,10 +35,18 @@ async function render(): Promise<void> {
     exportButton.className = 'secondary';
     exportButton.onclick = async () => {
       const events = await getEvents(recording.id);
+      const harEntries = await getHarEntries(recording.id);
       const filename = recording.title.replace(/[^\w.-]+/g, '_') || 'recording';
-      const archive = zipSync({
+      const files: Record<string, Uint8Array> = {
         [`${filename}.rrweb.json`]: strToU8(JSON.stringify({ recording, events }, null, 2)),
-      }, { level: 9 });
+      };
+      if (harEntries.length) {
+        files[`${filename}.har`] = strToU8(JSON.stringify(wrapHarEntries(
+          harEntries.map((item) => item.entry),
+          { title: recording.title, startedAt: recording.startedAt },
+        ), null, 2));
+      }
+      const archive = zipSync(files, { level: 9 });
       const blob = new Blob([
         archive.buffer.slice(archive.byteOffset, archive.byteOffset + archive.byteLength) as ArrayBuffer,
       ], { type: 'application/zip' });

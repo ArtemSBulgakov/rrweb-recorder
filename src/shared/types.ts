@@ -31,21 +31,6 @@ export type StoredEvent = {
   event: eventWithTime;
 };
 
-export type CapturedNetworkRequest = {
-  requestId: string;
-  tabId: number;
-  timestamp: number;
-  url: string;
-  method: string;
-  type: string;
-  status?: number;
-  requestHeaders?: Record<string, string>;
-  requestBody?: string;
-  responseHeaders?: Record<string, string>;
-  responseBody?: string;
-  encodedResponse?: boolean;
-};
-
 export type RecorderCommand =
   | { type: 'RRWEB_START'; recordingId: string; tabId: number; config: RecorderConfig }
   | { type: 'RRWEB_STOP'; recordingId: string }
@@ -83,3 +68,5 @@ export type RuntimeState = {
   trackedTabIds: number[];
   options: RecordingOptions;
 };
+
+export type { HarEntry, HarLog, StoredHarEntry } from './har';

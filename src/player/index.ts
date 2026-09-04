@@ -2,8 +2,9 @@ import '../ui.css';
 import 'rrweb-player/dist/style.css';
 import rrwebPlayer from 'rrweb-player';
 import { strFromU8, unzipSync, zipSync } from 'fflate';
-import { getEvents, getNetworkRequests, getRecording } from '../storage/db';
-import type { BrowserTab, CapturedNetworkRequest, Recording, StoredEvent } from '../shared/types';
+import { getEvents, getHarEntries, getRecording } from '../storage/db';
+import { wrapHarEntries, type HarEntry } from '../shared/har';
+import type { BrowserTab, Recording, StoredEvent } from '../shared/types';
 import type { eventWithTime, NetworkData, NetworkRequest } from '@rrweb/types';
 import type { LogData } from '@rrweb/rrweb-plugin-console-record';
 
@@ -13,7 +14,7 @@ const recordingId = new URLSearchParams(location.search).get('id');
 const recording = recordingId ? await getRecording(recordingId) : undefined;
 let loadedRecording: Recording | undefined = recording;
 let importedEvents: StoredEvent[] | undefined;
-let importedNetwork: CapturedNetworkRequest[] | undefined;
+let importedHarEntries: HarEntry[] | undefined;
 if (recordingId && !recording) throw new Error('Recording not found');
 
 document.querySelector('#back')!.addEventListener('click', () => history.back());
@@ -33,11 +34,14 @@ let currentPlayer: rrwebPlayer | undefined;
 let loadVersion = 0;
 let activitySwitching = false;
 let consoleTimeline: PluginEvent<LogData>[] = [];
+let harEntries: HarEntry[] = [];
 let networkTimeline: Array<{
   request: NetworkRequest;
   timestamp: number;
   source: 'debugger' | 'performance';
+  har?: HarEntry;
 }> = [];
+document.querySelector('#export-har')!.addEventListener('click', exportNetworkHar);
 document.querySelector('#export-pcap')!.addEventListener('click', exportNetworkPcap);
 if (loadedRecording) await loadRecording();
 else {
@@ -74,9 +78,9 @@ async function play(tab: BrowserTab, absoluteOffset = 0, resume = false): Promis
   const events = importedEvents
     ? importedEvents.filter((event) => event.tabId === tab.tabId).sort((a, b) => a.timestamp - b.timestamp)
     : await getEvents(recordingId!, tab.tabId);
-  const debuggerNetwork = importedEvents
-    ? (importedNetwork ?? []).filter((request) => request.tabId === tab.tabId)
-    : await getNetworkRequests(recordingId!, tab.tabId);
+  const debuggerHar = importedEvents
+    ? (importedHarEntries ?? []).filter((entry) => entry._tabId === tab.tabId || entry._tabId === undefined)
+    : (await getHarEntries(recordingId!, tab.tabId)).map((item) => item.entry);
   if (version !== loadVersion) return;
   (currentPlayer as (rrwebPlayer & { $destroy(): void }) | undefined)?.$destroy();
   currentPlayer = undefined;
@@ -84,7 +88,8 @@ async function play(tab: BrowserTab, absoluteOffset = 0, resume = false): Promis
   currentTabId = tab.tabId;
   for (const [tabId, button] of tabButtons) button.classList.toggle('active', tabId === tab.tabId);
   consoleTimeline = pluginEvents<LogData>(events.map((item) => item.event), 'rrweb/console@1');
-  networkTimeline = buildNetworkTimeline(events.map((item) => item.event), debuggerNetwork);
+  harEntries = debuggerHar;
+  networkTimeline = buildNetworkTimeline(events.map((item) => item.event), debuggerHar);
   renderTimelinePanels();
   if (!events.length) {
     target.textContent = 'This tab has no recorded events.';
@@ -131,19 +136,50 @@ function pluginEvents<T>(events: eventWithTime[], plugin: string): PluginEvent<T
 
 async function importRecording(file: File): Promise<void> {
   try {
-    let json: string;
+    let json: string | undefined;
+    let harJson: string | undefined;
     if (file.name.toLowerCase().endsWith('.zip')) {
       const files = unzipSync(new Uint8Array(await file.arrayBuffer()));
-      const entry = Object.entries(files).find(([name]) => name.toLowerCase().endsWith('.json'));
-      if (!entry) throw new Error('ZIP does not contain an rrweb JSON file.');
-      json = strFromU8(entry[1]);
+      const entries = Object.entries(files);
+      const rrwebEntry = entries.find(([name]) => /\.rrweb\.json$/i.test(name) || (name.toLowerCase().endsWith('.json') && !name.toLowerCase().endsWith('.har')));
+      const harEntry = entries.find(([name]) => name.toLowerCase().endsWith('.har'));
+      if (!rrwebEntry && !harEntry) throw new Error('ZIP does not contain an rrweb JSON or HAR file.');
+      if (rrwebEntry) json = strFromU8(rrwebEntry[1]);
+      if (harEntry) harJson = strFromU8(harEntry[1]);
+    } else if (file.name.toLowerCase().endsWith('.har')) {
+      harJson = await file.text();
     } else {
       json = await file.text();
     }
+
+    if (harJson) {
+      const parsedHar = JSON.parse(harJson) as { log?: { entries?: HarEntry[] } };
+      importedHarEntries = Array.isArray(parsedHar.log?.entries) ? parsedHar.log.entries : [];
+    }
+
+    if (!json) {
+      if (!importedHarEntries?.length) throw new Error('No recording data found.');
+      const startedAt = Math.min(...importedHarEntries.map((entry) => Date.parse(entry.startedDateTime)));
+      loadedRecording = {
+        id: `import-${Date.now()}`,
+        title: file.name.replace(/\.(rrweb\.)?(json|zip|har)$/i, ''),
+        startedAt,
+        endedAt: Math.max(...importedHarEntries.map((entry) => Date.parse(entry.startedDateTime) + entry.time)),
+        active: false,
+        tabs: [{ tabId: 1, title: 'Imported HAR', url: '', startedAt, eventCount: 0 }],
+        eventCount: 0,
+        tabActivity: [{ tabId: 1, timestamp: startedAt }],
+      };
+      importedEvents = [];
+      await loadRecording();
+      return;
+    }
+
     const parsed = JSON.parse(json) as {
       recording?: Recording;
       events?: StoredEvent[];
-      network?: CapturedNetworkRequest[];
+      har?: { log?: { entries?: HarEntry[] } };
+      network?: unknown;
     } | eventWithTime[];
     if (Array.isArray(parsed)) {
       if (!parsed.length) throw new Error('The rrweb event list is empty.');
@@ -177,7 +213,9 @@ async function importRecording(file: File): Promise<void> {
       }
       loadedRecording = parsed.recording;
       importedEvents = parsed.events;
-      importedNetwork = Array.isArray(parsed.network) ? parsed.network : [];
+      if (!importedHarEntries && Array.isArray(parsed.har?.log?.entries)) {
+        importedHarEntries = parsed.har.log.entries;
+      }
     }
     await loadRecording();
   } catch (error) {
@@ -219,7 +257,7 @@ function renderConsole(entries: PluginEvent<LogData>[], currentTimestamp: number
 
 function buildNetworkTimeline(
   events: eventWithTime[],
-  debuggerRequests: CapturedNetworkRequest[] = [],
+  debuggerHar: HarEntry[] = [],
 ): typeof networkTimeline {
   const pluginRequests = pluginEvents<NetworkData>(events, 'rrweb/network@1')
     .flatMap((event) => (event.data.payload.requests ?? []).map((request) => ({
@@ -227,27 +265,25 @@ function buildNetworkTimeline(
       timestamp: event.timestamp,
       source: 'performance' as const,
     })));
-  const debuggerEntries = debuggerRequests.map((request) => ({
-        request: {
-          name: request.url,
-          method: request.method,
-          status: request.status,
-          initiatorType: request.type.toLowerCase() as NetworkRequest['initiatorType'],
-          requestHeaders: request.requestHeaders,
-          requestBody: request.requestBody,
-          responseHeaders: request.responseHeaders,
-          responseBody: request.encodedResponse && request.responseBody
-            ? `[base64 encoded]\n${request.responseBody}`
-            : request.responseBody,
-        } as NetworkRequest,
-        timestamp: request.timestamp,
-        source: 'debugger' as const,
-      }));
-  const requests: Array<{
-    request: NetworkRequest;
-    timestamp: number;
-    source: 'debugger' | 'performance';
-  }> = [...debuggerEntries];
+  const debuggerEntries = debuggerHar.map((entry) => ({
+    request: {
+      name: entry.request.url,
+      method: entry.request.method,
+      status: entry.response.status || undefined,
+      initiatorType: (entry._resourceType ?? 'other').toLowerCase() as NetworkRequest['initiatorType'],
+      requestHeaders: Object.fromEntries(entry.request.headers.map((header) => [header.name, header.value])),
+      requestBody: entry.request.postData?.text,
+      responseHeaders: Object.fromEntries(entry.response.headers.map((header) => [header.name, header.value])),
+      responseBody: entry.response.content.encoding === 'base64' && entry.response.content.text
+        ? `[base64 encoded]\n${entry.response.content.text}`
+        : entry.response.content.text,
+      duration: entry.time,
+    } as NetworkRequest,
+    timestamp: Date.parse(entry.startedDateTime),
+    source: 'debugger' as const,
+    har: entry,
+  }));
+  const requests: typeof networkTimeline = [...debuggerEntries];
   for (const pluginEntry of pluginRequests) {
     const duplicate = debuggerEntries.some((debuggerEntry) =>
       debuggerEntry.request.name === pluginEntry.request.name &&
@@ -269,7 +305,7 @@ function renderNetwork(requests: typeof networkTimeline, currentTimestamp: numbe
     target.textContent = 'No network requests recorded.';
     return;
   }
-  for (const { request, timestamp, source } of requests) {
+  for (const { request, timestamp, source, har } of requests) {
     const row = document.createElement('details');
     row.className = 'event-row';
     row.classList.toggle('future-event', timestamp > currentTimestamp);
@@ -277,22 +313,30 @@ function renderNetwork(requests: typeof networkTimeline, currentTimestamp: numbe
     const status = request.status === undefined ? '—' : String(request.status);
     summary.textContent = `${formatTime(timestamp)} ${request.method ?? 'GET'} ${status} ${request.name}`;
     const body = document.createElement('pre');
-    body.textContent = formatRequest(request, source);
+    body.textContent = formatRequest(request, source, har);
     row.append(summary, body);
     target.append(row);
   }
 }
 
-function formatRequest(request: NetworkRequest, source: 'debugger' | 'performance'): string {
+function formatRequest(
+  request: NetworkRequest,
+  source: 'debugger' | 'performance',
+  har?: HarEntry,
+): string {
   const unavailableNote = source === 'performance'
-    ? '\nCapture note: Detailed headers and body were not captured by Chromium debugger. This request is shown from the browser Performance API only; it may have started before debugger attachment, been served by another target/service worker, or completed outside the attached network session.\n'
+    ? '\nCapture note: Shown from the rrweb Performance API plugin (no debugger). Headers/bodies are limited or missing.\n'
     : '';
+  const timings = har?.timings;
   return [
     `URL: ${request.name}`,
     `Method: ${request.method ?? 'GET'}`,
     `Status: ${request.status ?? '—'}`,
     `Type: ${request.initiatorType ?? '—'}`,
     `Duration: ${request.duration === undefined ? '—' : `${Math.round(request.duration)} ms`}`,
+    timings
+      ? `Timings: blocked=${fmtMs(timings.blocked)} dns=${fmtMs(timings.dns)} connect=${fmtMs(timings.connect)} ssl=${fmtMs(timings.ssl)} send=${fmtMs(timings.send)} wait=${fmtMs(timings.wait)} receive=${fmtMs(timings.receive)}`
+      : undefined,
     unavailableNote,
     '',
     'Request headers:',
@@ -306,7 +350,11 @@ function formatRequest(request: NetworkRequest, source: 'debugger' | 'performanc
     '',
     'Response body:',
     formatValue(request.responseBody),
-  ].join('\n');
+  ].filter((line) => line !== undefined).join('\n');
+}
+
+function fmtMs(value: number): string {
+  return value < 0 ? '—' : `${Math.round(value)}ms`;
 }
 
 function formatValue(value: unknown): string {
@@ -334,6 +382,21 @@ function formatDateTimeWithMilliseconds(timestamp: number): string {
   const date = new Date(timestamp);
   const milliseconds = String(date.getMilliseconds()).padStart(3, '0');
   return `${date.toLocaleString()}.${milliseconds}`;
+}
+
+function exportNetworkHar(): void {
+  if (!loadedRecording || !harEntries.length) return;
+  const har = wrapHarEntries(harEntries, {
+    title: loadedRecording.title,
+    startedAt: loadedRecording.startedAt,
+  });
+  const baseFilename = `${safeFilename(loadedRecording.title)}-${currentTabId ?? 'network'}`;
+  const blob = new Blob([JSON.stringify(har, null, 2)], { type: 'application/json' });
+  const link = document.createElement('a');
+  link.href = URL.createObjectURL(blob);
+  link.download = `${baseFilename}.har`;
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(link.href), 0);
 }
 
 function exportNetworkPcap(): void {
@@ -428,4 +491,3 @@ function ipv4Checksum(header: Uint8Array): number {
 function safeFilename(value: string): string {
   return value.replace(/[<>:"/\\|?*\u0000-\u001f]/g, '_').slice(0, 100) || 'recording';
 }
-

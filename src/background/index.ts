@@ -1,5 +1,12 @@
-import { addEventAndIncrement, getRecording, putNetworkRequest, putRecording } from '../storage/db';
-import type { CapturedNetworkRequest, ExtensionMessage, RecorderConfig, Recording, RecordingOptions, RuntimeState } from '../shared/types';
+import { addEventAndIncrement, getRecording, putRecording } from '../storage/db';
+import {
+  attachNetworkDebugger,
+  detachNetworkDebugger,
+  handleNetworkDebuggerEvent,
+  markNetworkDebuggerDetached,
+  networkDebuggerTabIds,
+} from './network-capture';
+import type { ExtensionMessage, RecorderConfig, Recording, RecordingOptions, RuntimeState } from '../shared/types';
 const ext = chrome;
 const defaultOptions: RecordingOptions = {
   recordConsole: true,
@@ -12,43 +19,6 @@ const initialization = ext.storage.local.get('runtimeState').then((stored) => {
   state = (stored.runtimeState as RuntimeState | undefined) ?? state;
 });
 const pendingTabs = new Set<number>();
-const debuggerRequests = new Map<string, CapturedNetworkRequest>();
-const debuggerTargets = new Set<number>();
-
-function debuggerKey(tabId: number, requestId: string): string {
-  return `${tabId}:${requestId}`;
-}
-
-async function configureDebugger(tabId: number): Promise<void> {
-  await ext.debugger.sendCommand({ tabId }, 'Network.enable');
-  await ext.debugger.sendCommand({ tabId }, 'Network.setCacheDisabled', { cacheDisabled: true });
-}
-
-async function attachDebugger(tabId: number): Promise<boolean> {
-  if (!ext.debugger?.attach) return false;
-  if (debuggerTargets.has(tabId)) {
-    try {
-      await configureDebugger(tabId);
-      return true;
-    } catch {
-      debuggerTargets.delete(tabId);
-    }
-  }
-  try {
-    await ext.debugger.attach({ tabId }, '1.3');
-    debuggerTargets.add(tabId);
-    await configureDebugger(tabId);
-    return true;
-  } catch {
-    debuggerTargets.delete(tabId);
-    return false;
-  }
-}
-
-async function detachDebugger(tabId: number): Promise<void> {
-  if (!ext.debugger?.detach || !debuggerTargets.delete(tabId)) return;
-  await ext.debugger.detach({ tabId }).catch(() => undefined);
-}
 
 async function injectRecorder(tabId: number): Promise<void> {
   await ext.scripting.executeScript({
@@ -141,7 +111,7 @@ async function startRecording(options: RecordingOptions): Promise<RuntimeState> 
   await injectRecorder(tab.id);
   if (options.captureAllNetworkBodies) {
     if (!ext.debugger?.attach) throw new Error('Deep network capture is available in Chromium only.');
-    if (!await attachDebugger(tab.id)) throw new Error('Could not attach Chromium debugger to this tab.');
+    if (!await attachNetworkDebugger(tab.id)) throw new Error('Could not attach Chromium debugger to this tab.');
   }
   await putRecording(recording);
   state = { active: true, activeRecordingId: id, trackedTabIds, options };
@@ -156,7 +126,7 @@ async function stopRecording(): Promise<RuntimeState> {
   const id = state.activeRecordingId;
   if (!id) return state;
   await broadcast({ type: 'RRWEB_STOP', recordingId: id });
-  await Promise.all([...debuggerTargets].map(detachDebugger));
+  await Promise.all(networkDebuggerTabIds().map(detachNetworkDebugger));
   const recording = await getRecording(id);
   if (recording) await putRecording({ ...recording, active: false, endedAt: Date.now() });
   state = { active: false, trackedTabIds: [], options: state.options };
@@ -207,7 +177,7 @@ async function trackOpenedTab(tabId: number, sourceTabId: number): Promise<void>
   recording.tabs.push({ tabId, title: tab.title ?? 'Untitled', url: tab.url ?? '', startedAt: Date.now(), eventCount: 0 });
   await putRecording(recording);
   if (state.options.captureAllNetworkBodies) {
-    await attachDebugger(tabId);
+    await attachNetworkDebugger(tabId);
   }
   await ext.tabs.sendMessage(tabId, {
     type: 'RRWEB_START', recordingId, tabId, config: recorderConfig(),
@@ -225,7 +195,7 @@ ext.webNavigation.onCreatedNavigationTarget.addListener((details) => {
 ext.webNavigation.onCommitted.addListener((details) => {
   if (details.frameId === 0 && /^https?:/.test(details.url)) {
     if (state.active && state.options.captureAllNetworkBodies && state.trackedTabIds.includes(details.tabId)) {
-      void attachDebugger(details.tabId);
+      void attachNetworkDebugger(details.tabId);
     }
     void injectRecorder(details.tabId).catch(() => undefined);
   }
@@ -234,7 +204,7 @@ ext.webNavigation.onCommitted.addListener((details) => {
 ext.webNavigation.onBeforeNavigate.addListener((details) => {
   if (details.frameId === 0 && state.active && state.options.captureAllNetworkBodies &&
       state.trackedTabIds.includes(details.tabId)) {
-    void attachDebugger(details.tabId);
+    void attachNetworkDebugger(details.tabId);
   }
 });
 
@@ -255,12 +225,12 @@ ext.tabs.onRemoved.addListener(async (tabId) => {
   }
   state.trackedTabIds = state.trackedTabIds.filter((id) => id !== tabId);
   await ext.storage.local.set({ runtimeState: state });
-  await detachDebugger(tabId);
+  await detachNetworkDebugger(tabId);
   await updateAction();
 });
 
 ext.debugger?.onDetach?.addListener((source) => {
-  if (source.tabId !== undefined) debuggerTargets.delete(source.tabId);
+  if (source.tabId !== undefined) markNetworkDebuggerDetached(source.tabId);
 });
 
 ext.debugger?.onEvent?.addListener((source, method, params) => {
@@ -268,54 +238,13 @@ ext.debugger?.onEvent?.addListener((source, method, params) => {
     await initialization;
     const tabId = source.tabId;
     if (tabId === undefined || !state.activeRecordingId || !state.trackedTabIds.includes(tabId)) return;
-    const data = params as Record<string, any>;
-    if (method === 'Network.requestWillBeSent') {
-      const request = data.request;
-      const capturedRequest: CapturedNetworkRequest = {
-        requestId: data.requestId,
-        tabId,
-        timestamp: Date.now(),
-        url: request.url,
-        method: request.method,
-        type: data.type ?? 'Other',
-        requestHeaders: request.headers,
-        requestBody: request.postData,
-      };
-      debuggerRequests.set(debuggerKey(tabId, data.requestId), capturedRequest);
-      await putNetworkRequest(state.activeRecordingId, capturedRequest);
-      return;
-    }
-    const key = debuggerKey(tabId, data.requestId);
-    const request = debuggerRequests.get(key);
-    if (!request) return;
-    if (method === 'Network.responseReceived') {
-      request.status = data.response.status;
-      request.responseHeaders = data.response.headers;
-      request.type = data.type ?? request.type;
-      await putNetworkRequest(state.activeRecordingId, request);
-      return;
-    }
-    if (method === 'Network.requestServedFromCache') {
-      request.type = `${request.type} (cache)`;
-      await putNetworkRequest(state.activeRecordingId, request);
-      return;
-    }
-    if (method === 'Network.loadingFinished') {
-      try {
-        const body = await ext.debugger.sendCommand({ tabId }, 'Network.getResponseBody', {
-          requestId: data.requestId,
-        }) as { body?: string; base64Encoded?: boolean };
-        request.responseBody = body.body;
-        request.encodedResponse = body.base64Encoded;
-      } catch {
-        request.responseBody = undefined;
-      }
-      await putNetworkRequest(state.activeRecordingId, request);
-      debuggerRequests.delete(key);
-    } else if (method === 'Network.loadingFailed') {
-      await putNetworkRequest(state.activeRecordingId, request);
-      debuggerRequests.delete(key);
-    }
+    if (!method.startsWith('Network.')) return;
+    await handleNetworkDebuggerEvent(
+      tabId,
+      state.activeRecordingId,
+      method,
+      (params ?? {}) as Record<string, any>,
+    );
   })();
 });
 

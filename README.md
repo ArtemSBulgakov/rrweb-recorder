@@ -11,7 +11,7 @@ Features:
 - DOM snapshots, clicks, input, scrolling, mutations, and console events;
 - network capture;
 - `.rrweb.zip` import and export;
-- timeline inspection and PCAP export.
+- timeline inspection, HAR export, and PCAP export.
 
 All data is stored locally in the browser. Input values are masked.
 
@@ -70,8 +70,9 @@ Click **Stop** to finish the session.
   including request and response bodies.
 - **Sequential IDs** — add sequential event identifiers.
 
-Deep network capture attaches a debugger to the tab and disables the browser
-cache.
+Deep network capture attaches a debugger to the tab, enables the CDP Network
+domain with large post/response buffers, disables the browser cache, and
+records request/response bodies plus ResourceTiming for accurate HAR timings.
 
 ### Replay and export
 
@@ -85,17 +86,23 @@ Each recording provides:
 - **Delete** — delete the recording.
 
 The player displays the DOM replay, console events, and network timeline.
-Exported archives contain JSON with this structure:
+From the network panel you can **Export HAR** (HTTP Archive 1.2) or Export PCAP.
+Exported archives contain:
+
+- `{name}.rrweb.json` — recording metadata and rrweb events (including
+  Performance API network plugin data when enabled);
+- `{name}.har` — debugger network capture as HAR 1.2 (when deep network
+  capture was enabled).
 
 ```json
 {
   "recording": {},
-  "events": [],
-  "network": []
+  "events": []
 }
 ```
 
-The player also accepts a plain JSON array of rrweb events.
+The player also accepts a plain JSON array of rrweb events, a `.har` file,
+or a ZIP with both.
 
 ## Playwright
 

@@ -1,7 +1,8 @@
-import type { CapturedNetworkRequest, Recording, StoredEvent } from '../shared/types';
+import type { Recording, StoredEvent } from '../shared/types';
+import type { StoredHarEntry } from '../shared/har';
 
 const DB_NAME = 'rrweb-recorder';
-const DB_VERSION = 2;
+const DB_VERSION = 4;
 const RECORDINGS = 'recordings';
 const EVENTS = 'events';
 const NETWORK = 'network';
@@ -17,8 +18,12 @@ function openDb(): Promise<IDBDatabase> {
         events.createIndex('recordingId', 'recordingId');
         events.createIndex('recordingTab', ['recordingId', 'tabId']);
       }
+      if (request.oldVersion < 4 && db.objectStoreNames.contains(NETWORK)) {
+        db.deleteObjectStore(NETWORK);
+      }
       if (!db.objectStoreNames.contains(NETWORK)) {
         const network = db.createObjectStore(NETWORK, { keyPath: ['recordingId', 'requestId'] });
+        network.createIndex('recordingId', 'recordingId');
         network.createIndex('recordingTab', ['recordingId', 'tabId']);
       }
     };
@@ -93,21 +98,22 @@ export async function getEvents(recordingId: string, tabId?: number): Promise<St
   return (result as StoredEvent[]).sort((a, b) => a.timestamp - b.timestamp);
 }
 
-export async function putNetworkRequest(
-  recordingId: string,
-  request: CapturedNetworkRequest,
-): Promise<void> {
+export async function putHarEntry(entry: StoredHarEntry): Promise<void> {
   const db = await openDb();
-  await requestResult(db.transaction(NETWORK, 'readwrite').objectStore(NETWORK).put({ recordingId, ...request }));
+  await requestResult(db.transaction(NETWORK, 'readwrite').objectStore(NETWORK).put(entry));
   db.close();
 }
 
-export async function getNetworkRequests(recordingId: string, tabId: number): Promise<CapturedNetworkRequest[]> {
+export async function getHarEntries(recordingId: string, tabId?: number): Promise<StoredHarEntry[]> {
   const db = await openDb();
-  const index = db.transaction(NETWORK).objectStore(NETWORK).index('recordingTab');
-  const result = await requestResult(index.getAll(IDBKeyRange.only([recordingId, tabId])));
+  const store = db.transaction(NETWORK).objectStore(NETWORK);
+  const result = tabId === undefined
+    ? await requestResult(store.index('recordingId').getAll(IDBKeyRange.only(recordingId)))
+    : await requestResult(store.index('recordingTab').getAll(IDBKeyRange.only([recordingId, tabId])));
   db.close();
-  return (result as CapturedNetworkRequest[]).sort((a, b) => a.timestamp - b.timestamp);
+  return (result as StoredHarEntry[]).sort(
+    (a, b) => Date.parse(a.entry.startedDateTime) - Date.parse(b.entry.startedDateTime),
+  );
 }
 
 export async function deleteRecording(id: string): Promise<void> {
