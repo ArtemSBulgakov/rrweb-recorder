@@ -1,6 +1,14 @@
 import '../ui.css';
 import { strToU8, zipSync } from 'fflate';
-import { deleteRecording, getEvents, getHarEntries, listRecordings, renameRecording } from '../storage/db';
+import {
+  deleteRecording,
+  getBrowserState,
+  getEvents,
+  getHarEntries,
+  listRecordings,
+  renameRecording,
+} from '../storage/db';
+import { buildCaptureDiagnostics, buildStandManifest } from '../shared/export';
 import { wrapHarEntries } from '../shared/har';
 const ext = chrome;
 const list = document.querySelector<HTMLElement>('#list')!;
@@ -36,16 +44,24 @@ async function render(): Promise<void> {
     exportButton.onclick = async () => {
       const events = await getEvents(recording.id);
       const harEntries = await getHarEntries(recording.id);
+      const browserState = await getBrowserState(recording.id);
+      const diagnostics = buildCaptureDiagnostics(recording, harEntries);
       const filename = recording.title.replace(/[^\w.-]+/g, '_') || 'recording';
       const files: Record<string, Uint8Array> = {
-        [`${filename}.rrweb.json`]: strToU8(JSON.stringify({ recording, events }, null, 2)),
-      };
-      if (harEntries.length) {
-        files[`${filename}.har`] = strToU8(JSON.stringify(wrapHarEntries(
+        'recording.rrweb.json': strToU8(JSON.stringify({ recording, events }, null, 2)),
+        'recording.har': strToU8(JSON.stringify(wrapHarEntries(
           harEntries.map((item) => item.entry),
           { title: recording.title, startedAt: recording.startedAt },
-        ), null, 2));
-      }
+        ), null, 2)),
+        'stand/manifest.json': strToU8(JSON.stringify(buildStandManifest(recording), null, 2)),
+        'stand/storage-state.json': strToU8(JSON.stringify(browserState ?? {
+          recordingId: recording.id,
+          capturedAt: recording.startedAt,
+          cookies: [],
+          origins: {},
+        }, null, 2)),
+        'stand/diagnostics.json': strToU8(JSON.stringify(diagnostics, null, 2)),
+      };
       const archive = zipSync(files, { level: 9 });
       const blob = new Blob([
         archive.buffer.slice(archive.byteOffset, archive.byteOffset + archive.byteLength) as ArrayBuffer,
@@ -53,7 +69,7 @@ async function render(): Promise<void> {
       const url = URL.createObjectURL(blob);
       const anchor = document.createElement('a');
       anchor.href = url;
-      anchor.download = `${filename}.rrweb.zip`;
+      anchor.download = `${filename}.zip`;
       anchor.click();
       URL.revokeObjectURL(url);
     };

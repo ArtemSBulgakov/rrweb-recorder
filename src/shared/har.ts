@@ -72,6 +72,9 @@ export type HarEntry = {
   _fromCache?: boolean;
   _requestId?: string;
   _tabId?: number;
+  _sessionId?: string;
+  _targetType?: string;
+  _captureError?: string;
 };
 
 export type HarLog = {
@@ -92,6 +95,7 @@ export type StoredHarEntry = {
   recordingId: string;
   requestId: string;
   tabId: number;
+  sessionId: string;
   entry: HarEntry;
 };
 
@@ -160,8 +164,9 @@ export function durationFromTimings(timings: NetworkTimings): number {
     .reduce((sum, value) => sum + value, 0);
 }
 
-export function headersFromRecord(headers?: Record<string, string>): HarHeader[] {
+export function headersFromRecord(headers?: Record<string, string> | HarHeader[]): HarHeader[] {
   if (!headers) return [];
+  if (Array.isArray(headers)) return headers.map((header) => ({ ...header }));
   return Object.entries(headers).map(([name, value]) => ({ name, value: String(value) }));
 }
 
@@ -174,11 +179,28 @@ export function headerValue(headers: HarHeader[], name: string): string | undefi
   return headers.find((header) => header.name.toLowerCase() === lower)?.value;
 }
 
-export function mergeHarHeaders(existing: HarHeader[], extra?: Record<string, string>): HarHeader[] {
+export function mergeHarHeaders(
+  existing: HarHeader[],
+  extra?: Record<string, string> | HarHeader[],
+): HarHeader[] {
   if (!extra) return existing;
-  const merged = headersToRecord(existing);
-  for (const [name, value] of Object.entries(extra)) merged[name] = value;
-  return headersFromRecord(merged);
+  const incoming = headersFromRecord(extra);
+  const names = new Set(incoming.map((header) => header.name.toLowerCase()));
+  return [...existing.filter((header) => !names.has(header.name.toLowerCase())), ...incoming];
+}
+
+export function headersFromRawText(rawText?: string): HarHeader[] | undefined {
+  if (!rawText) return undefined;
+  const headers: HarHeader[] = [];
+  for (const line of rawText.split(/\r?\n/).slice(1)) {
+    const separator = line.indexOf(':');
+    if (separator <= 0) continue;
+    headers.push({
+      name: line.slice(0, separator).trim(),
+      value: line.slice(separator + 1).trim(),
+    });
+  }
+  return headers.length ? headers : undefined;
 }
 
 export function queryStringFromUrl(url: string): HarHeader[] {
@@ -202,11 +224,13 @@ export function bodyByteLength(text?: string, base64 = false): number {
 export function createHarEntry(input: {
   requestId: string;
   tabId: number;
+  sessionId: string;
+  targetType: string;
   wallTimeMs: number;
   url: string;
   method: string;
   type: string;
-  headers?: Record<string, string>;
+  headers?: Record<string, string> | HarHeader[];
   postData?: string;
 }): HarEntry {
   const headers = headersFromRecord(input.headers);
@@ -244,6 +268,8 @@ export function createHarEntry(input: {
     _resourceType: input.type,
     _requestId: input.requestId,
     _tabId: input.tabId,
+    _sessionId: input.sessionId,
+    _targetType: input.targetType,
   };
 }
 
@@ -292,7 +318,7 @@ export function applyHarResponse(
   response: {
     status?: number;
     statusText?: string;
-    headers?: Record<string, string>;
+    headers?: Record<string, string> | HarHeader[];
     mimeType?: string;
     protocol?: string;
     remoteIPAddress?: string;

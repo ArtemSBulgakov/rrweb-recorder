@@ -17,17 +17,15 @@ function startRecorder(): void {
     emit(event) {
       window.__rrwebPlaywrightEvents?.push(event);
     },
-    recordCanvas: false,
+    recordCanvas: true,
     collectFonts: true,
-    maskAllInputs: true,
+    maskAllInputs: false,
     sampling: {
       mousemove: 50,
       mouseInteraction: true,
       scroll: 100,
       input: 'last',
     },
-    maskTextSelector: '[data-rrweb-mask]',
-    blockSelector: '[data-rrweb-block]',
     plugins: [
       getRecordSequentialIdPlugin(),
       getRecordConsolePlugin({

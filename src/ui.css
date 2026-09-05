@@ -13,6 +13,8 @@ main { max-width: 1100px; margin: auto; padding: 20px; }
 .summary strong { font-size: 19px; }
 .summary span { color: #667085; font-size: 12px; }
 label { display: block; padding: 7px 0; }
+#cookie-domains { width: 100%; resize: vertical; font: inherit; border: 1px solid #dfe4ee; border-radius: 8px; padding: 8px; }
+button:disabled { opacity: .6; cursor: default; }
 input[type="checkbox"] { margin-right: 8px; accent-color: #3759d7; }
 .hint { color: #667085; font-size: 11px; }
 h1, h2, p { margin-top: 0; }

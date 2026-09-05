@@ -10,10 +10,12 @@ Features:
 - multi-tab recording;
 - DOM snapshots, clicks, input, scrolling, mutations, and console events;
 - network capture;
-- `.rrweb.zip` import and export;
+- complete ZIP import and export;
 - timeline inspection, HAR export, and PCAP export.
 
-All data is stored locally in the browser. Input values are masked.
+All data is stored locally in the browser. Recordings and exports intentionally
+retain complete DOM/input values, canvas data, headers, bodies, cookies,
+localStorage, and sessionStorage, including credentials and personal data.
 
 ## Installation
 
@@ -69,10 +71,22 @@ Click **Stop** to finish the session.
 - **Deep network capture** — Chromium-only DevTools Protocol capture,
   including request and response bodies.
 - **Sequential IDs** — add sequential event identifiers.
+- **Cookie domains** — hostnames whose cookies are saved in `stand/storage-state.json`
+  during Chromium deep capture. Enter one hostname per line (commas also work),
+  then click **Save domains** to persist the setting without starting a recording.
+  Starting a recording also saves the entered list. `example.com` includes
+  `example.com` and its subdomains; `login.example.com` does not include parent-domain
+  `.example.com` cookies. Empty means no cookies. URLs, ports, and wildcards are rejected.
+  The list cannot change during recording. Cookie values stay unredacted;
+  HAR `Cookie`/`Set-Cookie` headers and local/session storage are not filtered.
+  Existing recordings are unchanged.
 
 Deep network capture attaches a debugger to the tab, enables the CDP Network
-domain with large post/response buffers, disables the browser cache, and
-records request/response bodies plus ResourceTiming for accurate HAR timings.
+domain with large post/response buffers, bypasses service workers, disables the
+browser cache, and automatically reloads the tab so the initial document and
+startup assets are captured. It also captures iframe/worker target traffic,
+request/response bodies, browser state, and ResourceTiming for accurate HAR
+timings.
 
 ### Replay and export
 
@@ -82,17 +96,18 @@ Each recording provides:
 
 - **Play** — replay the session;
 - **Rename** — rename the recording;
-- **Export ZIP** — export a `.rrweb.zip` archive;
+- **Export ZIP** — export the complete unredacted recording;
 - **Delete** — delete the recording.
 
 The player displays the DOM replay, console events, and network timeline.
 From the network panel you can **Export HAR** (HTTP Archive 1.2) or Export PCAP.
 Exported archives contain:
 
-- `{name}.rrweb.json` — recording metadata and rrweb events (including
-  Performance API network plugin data when enabled);
-- `{name}.har` — debugger network capture as HAR 1.2 (when deep network
-  capture was enabled).
+- `recording.rrweb.json` — recording metadata and rrweb events;
+- `recording.har` — complete debugger network capture as HAR 1.2;
+- `stand/manifest.json` — versioned recording locations and start URL;
+- `stand/storage-state.json` — unredacted cookies and per-origin storage;
+- `stand/diagnostics.json` — completeness errors and missing response bodies.
 
 ```json
 {

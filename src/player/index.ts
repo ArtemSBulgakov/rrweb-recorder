@@ -141,8 +141,12 @@ async function importRecording(file: File): Promise<void> {
     if (file.name.toLowerCase().endsWith('.zip')) {
       const files = unzipSync(new Uint8Array(await file.arrayBuffer()));
       const entries = Object.entries(files);
-      const rrwebEntry = entries.find(([name]) => /\.rrweb\.json$/i.test(name) || (name.toLowerCase().endsWith('.json') && !name.toLowerCase().endsWith('.har')));
-      const harEntry = entries.find(([name]) => name.toLowerCase().endsWith('.har'));
+      const rrwebEntry = files['recording.rrweb.json']
+        ? ['recording.rrweb.json', files['recording.rrweb.json']] as const
+        : entries.find(([name]) => /\.rrweb\.json$/i.test(name));
+      const harEntry = files['recording.har']
+        ? ['recording.har', files['recording.har']] as const
+        : entries.find(([name]) => name.toLowerCase().endsWith('.har'));
       if (!rrwebEntry && !harEntry) throw new Error('ZIP does not contain an rrweb JSON or HAR file.');
       if (rrwebEntry) json = strFromU8(rrwebEntry[1]);
       if (harEntry) harJson = strFromU8(harEntry[1]);

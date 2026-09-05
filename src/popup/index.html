@@ -6,8 +6,13 @@
 <section id="options">
 <label><input id="console" type="checkbox" checked> Record console</label>
 <label><input id="network" type="checkbox" checked> Record network requests</label>
-<label><input id="deep-network" type="checkbox"> Capture all response bodies <span class="hint">Chromium debugger</span></label>
+<label><input id="deep-network" type="checkbox" checked> Capture all response bodies <span class="hint">Chromium debugger · reloads tab</span></label>
 <label><input id="sequential" type="checkbox" checked> Sequential ID</label>
+<label for="cookie-domains">Cookie domains</label>
+<textarea id="cookie-domains" rows="3" placeholder="example.com&#10;login.example.org" aria-describedby="cookie-domains-hint" spellcheck="false"></textarea>
+<p id="cookie-domains-hint" class="hint">One domain per line, including subdomains. Empty = no cookies. Requires Chromium deep capture. Applies only to storage-state cookies; HAR headers remain unredacted.</p>
+<button id="save-cookie-domains" type="button" class="secondary">Save domains</button>
+<span id="cookie-domains-status" class="hint" role="status"></span>
 </section>
-<div class="toolbar"><button id="toggle">Play</button><button id="reload-tabs" class="secondary" hidden>Reload recorded tabs</button><button id="library" class="secondary">Recordings</button></div>
+<div class="toolbar"><button id="toggle">Play</button><button id="library" class="secondary">Recordings</button></div>
 </main><script type="module" src="./index.ts"></script></body></html>

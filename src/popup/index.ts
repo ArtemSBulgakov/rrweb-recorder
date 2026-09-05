@@ -1,5 +1,6 @@
 import '../ui.css';
 import type { Recording, RuntimeState } from '../shared/types';
+import { normalizeCookieDomains } from '../shared/cookie-domains';
 const ext = chrome;
 const status = document.querySelector<HTMLParagraphElement>('#status')!;
 const toggle = document.querySelector<HTMLButtonElement>('#toggle')!;
@@ -7,6 +8,9 @@ const consoleInput = document.querySelector<HTMLInputElement>('#console')!;
 const networkInput = document.querySelector<HTMLInputElement>('#network')!;
 const deepNetworkInput = document.querySelector<HTMLInputElement>('#deep-network')!;
 const sequentialInput = document.querySelector<HTMLInputElement>('#sequential')!;
+const cookieDomainsInput = document.querySelector<HTMLTextAreaElement>('#cookie-domains')!;
+const saveCookieDomains = document.querySelector<HTMLButtonElement>('#save-cookie-domains')!;
+const cookieDomainsStatus = document.querySelector<HTMLElement>('#cookie-domains-status')!;
 const tracked = document.querySelector<HTMLElement>('#tracked')!;
 const tabList = document.querySelector<HTMLUListElement>('#tabs')!;
 const timer = document.querySelector<HTMLElement>('#timer')!;
@@ -14,7 +18,6 @@ const summary = document.querySelector<HTMLElement>('#summary')!;
 const eventCount = document.querySelector<HTMLElement>('#event-count')!;
 const tabCount = document.querySelector<HTMLElement>('#tab-count')!;
 const errorMessage = document.querySelector<HTMLElement>('#error')!;
-const reloadTabs = document.querySelector<HTMLButtonElement>('#reload-tabs')!;
 let refreshTimer: number | undefined;
 const debuggerAvailable = Boolean(ext.debugger?.attach);
 if (!debuggerAvailable) {
@@ -35,12 +38,12 @@ async function render(state: RuntimeState): Promise<void> {
   networkInput.checked = state.options.recordNetwork;
   deepNetworkInput.checked = debuggerAvailable && state.options.captureAllNetworkBodies;
   sequentialInput.checked = state.options.sequentialId;
+  cookieDomainsInput.value = state.options.cookieDomains.join('\n');
   for (const input of [consoleInput, networkInput, deepNetworkInput, sequentialInput]) input.disabled = state.active;
   tracked.hidden = !state.active;
   summary.hidden = !state.active;
   timer.hidden = !state.active;
   document.querySelector<HTMLElement>('#options')!.hidden = state.active;
-  reloadTabs.hidden = !(state.active && state.options.captureAllNetworkBodies);
   if (recording) {
     timer.textContent = formatDuration(Date.now() - recording.startedAt);
     eventCount.textContent = recording.eventCount.toLocaleString();
@@ -100,10 +103,43 @@ function formatDuration(milliseconds: number): string {
     : `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
 }
 
+function cookieDomains(): string[] {
+  return normalizeCookieDomains(cookieDomainsInput.value.split(/[\s,]+/).filter(Boolean));
+}
+
+cookieDomainsInput.addEventListener('input', () => {
+  cookieDomainsStatus.textContent = 'Not saved';
+});
+saveCookieDomains.addEventListener('click', async () => {
+  errorMessage.hidden = true;
+  saveCookieDomains.disabled = true;
+  toggle.disabled = true;
+  cookieDomainsInput.disabled = true;
+  cookieDomainsStatus.textContent = 'Saving…';
+  try {
+    const response = await ext.runtime.sendMessage({
+      type: 'SAVE_COOKIE_DOMAINS', domains: cookieDomains(),
+    }) as RuntimeState | { error: string };
+    if ('error' in response) throw new Error(response.error);
+    cookieDomainsInput.value = response.options.cookieDomains.join('\n');
+    cookieDomainsStatus.textContent = 'Saved';
+  } catch (error) {
+    cookieDomainsStatus.textContent = 'Not saved';
+    errorMessage.textContent = error instanceof Error ? error.message : String(error);
+    errorMessage.hidden = false;
+  } finally {
+    saveCookieDomains.disabled = false;
+    toggle.disabled = false;
+    cookieDomainsInput.disabled = false;
+  }
+});
+
 void refresh();
 toggle.addEventListener('click', async () => {
   errorMessage.hidden = true;
   toggle.disabled = true;
+  saveCookieDomains.disabled = true;
+  cookieDomainsInput.disabled = true;
   try {
     const state = await ext.runtime.sendMessage({ type: 'GET_STATE' }) as RuntimeState;
     const message = state.active ? { type: 'STOP_RECORDING' } : {
@@ -111,28 +147,23 @@ toggle.addEventListener('click', async () => {
       options: {
         recordConsole: consoleInput.checked,
         recordNetwork: networkInput.checked,
-      captureAllNetworkBodies: deepNetworkInput.checked,
+        captureAllNetworkBodies: deepNetworkInput.checked,
         sequentialId: sequentialInput.checked,
+        cookieDomains: cookieDomains(),
       },
     };
-    await ext.runtime.sendMessage(message);
+    const response = await ext.runtime.sendMessage(message) as RuntimeState | { error: string };
+    if ('error' in response) throw new Error(response.error);
     await refresh();
   } catch (error) {
     errorMessage.textContent = error instanceof Error ? error.message : String(error);
     errorMessage.hidden = false;
   } finally {
     toggle.disabled = false;
+    saveCookieDomains.disabled = false;
+    cookieDomainsInput.disabled = false;
   }
 });
 document.querySelector('#library')!.addEventListener('click', () => {
   void ext.runtime.sendMessage({ type: 'OPEN_LIBRARY' });
-});
-reloadTabs.addEventListener('click', async () => {
-  reloadTabs.disabled = true;
-  try {
-    await ext.runtime.sendMessage({ type: 'RELOAD_RECORDED_TABS' });
-    window.close();
-  } finally {
-    reloadTabs.disabled = false;
-  }
 });

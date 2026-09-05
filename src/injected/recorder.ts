@@ -23,14 +23,6 @@ const stateKey = '__rrwebExtensionRecorder';
 const pageWindow = window as Window & { [stateKey]?: PageRecorderState };
 const pageState = pageWindow[stateKey] ??= { initialized: false };
 
-function redactHeaders(headers: unknown, names: string[]): unknown {
-  if (!headers || typeof headers !== 'object') return headers;
-  const redacted = new Set(names.map((name) => name.toLowerCase()));
-  return Object.fromEntries(Object.entries(headers).map(([key, value]) => [
-    key, redacted.has(key.toLowerCase()) ? '[REDACTED]' : value,
-  ]));
-}
-
 function start(message: Extract<RecorderCommand, { type: 'RRWEB_START' }>): void {
   if (pageState.activeRecordingId === message.recordingId) return;
   pageState.stop?.();
@@ -45,11 +37,9 @@ function start(message: Extract<RecorderCommand, { type: 'RRWEB_START' }>): void
         event,
       } satisfies RecorderCommand, '*');
     },
-    recordCanvas: false,
+    recordCanvas: true,
     collectFonts: true,
-    maskAllInputs: true,
-    maskTextSelector: '[data-rrweb-mask]',
-    blockSelector: '[data-rrweb-block]',
+    maskAllInputs: false,
     plugins: [
       ...(config.sequentialId ? [getRecordSequentialIdPlugin()] : []),
       ...(config.recordConsole ? [getRecordConsolePlugin({
@@ -62,11 +52,6 @@ function start(message: Extract<RecorderCommand, { type: 'RRWEB_START' }>): void
         recordHeaders: true,
         recordBody: { request: true, response: true },
         recordInitialRequests: true,
-        transformRequestFn(request) {
-          request.requestHeaders = redactHeaders(request.requestHeaders, config.redactHeaders) as typeof request.requestHeaders;
-          request.responseHeaders = redactHeaders(request.responseHeaders, config.redactHeaders) as typeof request.responseHeaders;
-          return request;
-        },
       })] : []),
     ],
   }) ?? undefined;
